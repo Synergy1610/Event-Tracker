@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+app/build/
+
+# Android Studio
+.idea/
+*.iml
+local.properties
+
+# OpenCode repository instructions (keep local)
+AGENTS.md
+
+# OS files
+.DS_Store
+Thumbs.db
