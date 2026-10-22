@@ -1,14 +1,19 @@
 package com.eventtracker
 
 import android.content.Context
+import android.content.ClipData
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +46,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -79,8 +85,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -114,6 +122,7 @@ private data class TrackedEvent(
 
 private enum class Screen { HOME, EVENTS }
 private enum class EventsTab { LIST, CALENDAR }
+private enum class EventEditorStep { PASTE, DETAILS, NOTES }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -269,8 +278,12 @@ private fun HomeScreen(
             Column(Modifier.padding(22.dp)) {
                 Text("YOUR EVENTS", color = Sage, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                Text("$eventCount", color = Color.White, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold)
-                Text(if (eventCount == 1) "event saved" else "events saved", color = Color.White.copy(alpha = .8f))
+                Text(
+                    "$eventCount Events saved.",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
                 if (nextEvent != null) {
                     Spacer(Modifier.height(18.dp))
                     HorizontalRule(Color.White.copy(alpha = .2f))
@@ -392,7 +405,7 @@ private fun EventList(events: List<TrackedEvent>, onEventClick: (TrackedEvent) -
         EmptyEvents(modifier)
     } else {
         LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(events.sortedWith(compareBy<TrackedEvent> { parseDate(it.eventDate) ?: LocalDate.MAX }.thenBy { it.name }), key = { it.id }) {
+            items(events.sortedWith(compareBy<TrackedEvent> { parseDate(it.registrationDeadline) ?: LocalDate.MAX }.thenBy { it.name }), key = { it.id }) {
                 EventCard(it, onClick = { onEventClick(it) })
             }
         }
@@ -418,9 +431,48 @@ private fun EventCard(event: TrackedEvent, onClick: () -> Unit) {
             Text(event.name, style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold)
             if (event.eventDate.isNotBlank()) DateLine("Event", event.eventDate, event.eventTime, Green)
             if (event.registrationDeadline.isNotBlank()) DateLine("Register by", event.registrationDeadline, event.deadlineTime, DeepTeal)
-            if (event.link.isNotBlank()) Text(event.link, color = Green, style = MaterialTheme.typography.bodySmall)
+            if (event.link.isNotBlank()) RegistrationLinkActions(event.link)
             if (event.notes.isNotBlank()) Text(event.notes, color = Ink.copy(alpha = .8f), style = MaterialTheme.typography.bodyMedium)
         }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun RegistrationLinkActions(link: String) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val openLink: () -> Unit = {
+        val trimmed = link.trim()
+        val target = if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
+            trimmed
+        } else {
+            "https://$trimmed"
+        }
+        val uri = Uri.parse(target)
+        if (uri.host.isNullOrBlank()) {
+            Toast.makeText(context, "This registration link is not valid.", Toast.LENGTH_SHORT).show()
+        } else {
+            runCatching { uriHandler.openUri(target) }
+                .onFailure { Toast.makeText(context, "Could not open the registration link.", Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    val copyLink: () -> Unit = {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("Registration link", link))
+        Toast.makeText(context, "Registration link copied.", Toast.LENGTH_SHORT).show()
+    }
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = link,
+            modifier = Modifier.weight(1f).combinedClickable(onClick = openLink, onLongClick = copyLink),
+            color = Green,
+            style = MaterialTheme.typography.bodySmall,
+            textDecoration = TextDecoration.Underline,
+            maxLines = 2,
+        )
     }
 }
 
@@ -460,7 +512,12 @@ private fun EventDetailsDialog(
                     if (event.registrationDeadline.isNotBlank()) {
                         DetailSection("Registration deadline", "${formatDate(event.registrationDeadline)} · ${event.deadlineTime.takeIf { it.isNotBlank() }?.let(::formatTime) ?: "All day"}")
                     }
-                    if (event.link.isNotBlank()) DetailSection("Registration link", event.link)
+                    if (event.link.isNotBlank()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Registration link", color = DeepTeal, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            RegistrationLinkActions(event.link)
+                        }
+                    }
                     if (event.notes.isNotBlank()) DetailSection("Notes", event.notes)
                     if (event.sourceText.isNotBlank()) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -557,6 +614,7 @@ private fun EventCalendar(events: List<TrackedEvent>, onEventClick: (TrackedEven
                     CalendarDay(
                         date = date,
                         selected = date == selectedDate,
+                        isToday = date == LocalDate.now(),
                         hasEvent = hasEvent,
                         hasDeadline = hasDeadline,
                         onClick = { selectedDate = date },
@@ -567,7 +625,7 @@ private fun EventCalendar(events: List<TrackedEvent>, onEventClick: (TrackedEven
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             LegendDot(Green, "Event")
-            LegendDot(DeepTeal, "Registration deadline")
+            LegendDot(Ink, "Registration deadline", isDeadline = true)
         }
         Spacer(Modifier.height(16.dp))
         Text(selectedDate.format(DisplayDateFormat), style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold)
@@ -583,7 +641,8 @@ private fun EventCalendar(events: List<TrackedEvent>, onEventClick: (TrackedEven
                         colors = CardDefaults.cardColors(containerColor = Color.White),
                     ) {
                         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(9.dp).clip(CircleShape).background(if (kind == "Event") Green else DeepTeal))
+                            Box(Modifier.size(9.dp).clip(if (kind == "Event") CircleShape else RoundedCornerShape(2.dp))
+                                .background(if (kind == "Event") Green else Ink))
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(event.name, color = Ink, fontWeight = FontWeight.SemiBold)
@@ -599,26 +658,32 @@ private fun EventCalendar(events: List<TrackedEvent>, onEventClick: (TrackedEven
 }
 
 @Composable
-private fun CalendarDay(date: LocalDate, selected: Boolean, hasEvent: Boolean, hasDeadline: Boolean, onClick: () -> Unit) {
+private fun CalendarDay(date: LocalDate, selected: Boolean, isToday: Boolean, hasEvent: Boolean, hasDeadline: Boolean, onClick: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f).padding(2.dp)
             .clip(RoundedCornerShape(12.dp)).background(if (selected) DeepTeal else Color.Transparent)
+            .then(if (isToday) Modifier.border(1.dp, if (selected) Sage else Green, RoundedCornerShape(12.dp)) else Modifier)
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("${date.dayOfMonth}", color = if (selected) Color.White else Ink, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "${date.dayOfMonth}",
+            color = if (selected) Color.White else Ink,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.height(7.dp)) {
             if (hasEvent) Box(Modifier.size(5.dp).clip(CircleShape).background(if (selected) Sage else Green))
-            if (hasDeadline) Box(Modifier.size(5.dp).clip(CircleShape).background(if (selected) Color.White else DeepTeal))
+            if (hasDeadline) Box(Modifier.size(5.dp).clip(RoundedCornerShape(1.dp)).background(if (selected) Color.White else Ink))
         }
     }
 }
 
 @Composable
-private fun LegendDot(color: Color, label: String) {
+private fun LegendDot(color: Color, label: String, isDeadline: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Box(Modifier.size(8.dp).clip(if (isDeadline) RoundedCornerShape(2.dp) else CircleShape).background(color))
         Spacer(Modifier.width(6.dp))
         Text(label, color = Ink.copy(alpha = .75f), style = MaterialTheme.typography.labelSmall)
     }
@@ -642,80 +707,149 @@ private fun EventEditor(
     var deadlineTime by remember(suggested.id) { mutableStateOf(suggested.deadlineTime) }
     var link by remember(suggested.id) { mutableStateOf(suggested.link) }
     var notes by remember(suggested.id) { mutableStateOf(suggested.notes) }
+    var notesDraft by remember(suggested.id) { mutableStateOf(suggested.notes) }
     var source by remember(suggested.id) { mutableStateOf(suggested.sourceText) }
     var clipboardMessage by remember { mutableStateOf("") }
+    var step by remember(suggested.id) {
+        mutableStateOf(if (initial == null && incomingText.isBlank()) EventEditorStep.PASTE else EventEditorStep.DETAILS)
+    }
     val context = LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add an event", color = Ink, fontWeight = FontWeight.Bold) },
+        title = {
+            Text(
+                when (step) {
+                    EventEditorStep.PASTE -> "Add an event"
+                    EventEditorStep.DETAILS -> if (initial == null) "Review event details" else "Edit event"
+                    EventEditorStep.NOTES -> "Event notes"
+                },
+                color = Ink,
+                fontWeight = FontWeight.Bold,
+            )
+        },
         text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Event name") }, singleLine = true)
-                OutlinedButton(
-                    onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                        val pastedText = clipboard?.primaryClip
-                            ?.takeIf { it.itemCount > 0 }
-                            ?.getItemAt(0)
-                            ?.coerceToText(context)
-                            ?.toString()
-                            .orEmpty()
-                        if (pastedText.isBlank()) {
-                            clipboardMessage = "Copy the WhatsApp message first, then tap here."
-                        } else {
-                            source = pastedText
-                            val suggestions = suggestedEvent(pastedText)
-                            if (name.isBlank()) name = suggestions.name
-                            if (link.isBlank()) link = suggestions.link
-                            clipboardMessage = "Message pasted. Check the suggested details below."
-                        }
-                    },
-                    shape = RoundedCornerShape(12.dp),
+            when (step) {
+                EventEditorStep.PASTE -> Column(
+                    Modifier.fillMaxWidth().heightIn(min = 72.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Icon(Icons.Default.ContentPaste, contentDescription = null, tint = DeepTeal)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Paste WhatsApp message", color = DeepTeal)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = DeepTeal)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "In WhatsApp, long-press the message and tap Copy.",
+                            color = DeepTeal,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            val pastedText = clipboard?.primaryClip
+                                ?.takeIf { it.itemCount > 0 }
+                                ?.getItemAt(0)
+                                ?.coerceToText(context)
+                                ?.toString()
+                                .orEmpty()
+                            if (pastedText.isBlank()) {
+                                clipboardMessage = "Copy the WhatsApp message first, then tap here."
+                            } else {
+                                source = pastedText
+                                val suggestions = suggestedEvent(pastedText)
+                                name = suggestions.name
+                                link = suggestions.link
+                                eventDate = suggestions.eventDate
+                                eventTime = suggestions.eventTime
+                                deadline = suggestions.registrationDeadline
+                                deadlineTime = suggestions.deadlineTime
+                                clipboardMessage = "Message pasted. Review the detected details before saving."
+                                step = EventEditorStep.DETAILS
+                            }
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Paste WhatsApp message")
+                    }
+                    if (clipboardMessage.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(clipboardMessage, color = DeepTeal, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                if (clipboardMessage.isNotBlank()) {
-                    Text(clipboardMessage, color = DeepTeal, style = MaterialTheme.typography.bodySmall)
+
+                EventEditorStep.DETAILS -> Column(
+                    Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (source.isNotBlank()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Original WhatsApp message", color = DeepTeal, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            Surface(color = Color(0xFFE7EEE8), shape = RoundedCornerShape(12.dp)) {
+                                SelectionContainer {
+                                    Text(source, modifier = Modifier.padding(12.dp), color = Ink, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+                    OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Event name") }, singleLine = true)
+                    DateInput("Event date · optional", eventDate, { eventDate = it }, eventTime, { eventTime = it })
+                    DateInput("Registration deadline · optional", deadline, { deadline = it }, deadlineTime, { deadlineTime = it })
+                    OutlinedTextField(link, { link = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Registration link") }, singleLine = true)
+                    OutlinedButton(
+                        onClick = { notesDraft = notes; step = EventEditorStep.NOTES },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(if (notes.isBlank()) "Add notes" else "Edit notes", color = DeepTeal)
+                    }
+                    Text("Leave a time blank for an all-day date.", color = DeepTeal, style = MaterialTheme.typography.bodySmall)
                 }
-                OutlinedTextField(
-                    value = source,
-                    onValueChange = { source = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Announcement text") },
-                    placeholder = { Text("Paste the event message here, or use the button above") },
-                    minLines = 3,
-                )
-                DateInput("Event date · optional", eventDate, { eventDate = it }, eventTime, { eventTime = it })
-                DateInput("Registration deadline · optional", deadline, { deadline = it }, deadlineTime, { deadlineTime = it })
-                OutlinedTextField(link, { link = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Registration link") }, singleLine = true)
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Notes") },
-                    placeholder = { Text("Other useful details") },
-                    minLines = 3,
-                )
-                Text("Leave a time blank for an all-day date.", color = DeepTeal, style = MaterialTheme.typography.bodySmall)
+
+                EventEditorStep.NOTES -> Column(
+                    Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Add any extra details you want to remember.", color = DeepTeal, style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = notesDraft,
+                        onValueChange = { notesDraft = it },
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        label = { Text("Notes") },
+                        placeholder = { Text("Other useful details") },
+                        minLines = 5,
+                    )
+                }
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    onSave(suggested.copy(
-                        name = name.trim(), eventDate = normalizeDate(eventDate), eventTime = eventTime,
-                        registrationDeadline = normalizeDate(deadline), deadlineTime = deadlineTime,
-                        link = link.trim(), notes = notes.trim(), sourceText = source,
-                    ))
-                },
-                enabled = name.isNotBlank() && (eventDate.isBlank() || parseDate(eventDate) != null) &&
-                    (deadline.isBlank() || parseDate(deadline) != null),
-            ) { Text("Save event") }
+            when (step) {
+                EventEditorStep.PASTE -> Unit
+                EventEditorStep.DETAILS -> Button(
+                    onClick = {
+                        onSave(suggested.copy(
+                            name = name.trim(), eventDate = normalizeDate(eventDate), eventTime = eventTime,
+                            registrationDeadline = normalizeDate(deadline), deadlineTime = deadlineTime,
+                            link = link.trim(), notes = notes.trim(), sourceText = source,
+                        ))
+                    },
+                    enabled = name.isNotBlank() && (eventDate.isBlank() || parseDate(eventDate) != null) &&
+                        (deadline.isBlank() || parseDate(deadline) != null),
+                ) { Text("Save event") }
+                EventEditorStep.NOTES -> Button(onClick = { notes = notesDraft; step = EventEditorStep.DETAILS }) {
+                    Text("Save notes")
+                }
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            when (step) {
+                EventEditorStep.PASTE -> TextButton(onClick = onDismiss) { Text("Cancel") }
+                EventEditorStep.DETAILS -> TextButton(onClick = onDismiss) { Text("Cancel") }
+                EventEditorStep.NOTES -> TextButton(onClick = { step = EventEditorStep.DETAILS }) { Text("Back") }
+            }
+        },
         containerColor = Paper,
     )
 }
@@ -743,7 +877,7 @@ private fun DateInput(label: String, date: String, onDateChange: (String) -> Uni
         OutlinedButton(onClick = { showTimePicker = true }, shape = RoundedCornerShape(12.dp)) {
             Icon(Icons.Default.Schedule, contentDescription = null, tint = DeepTeal)
             Spacer(Modifier.width(8.dp))
-            Text(if (time.isBlank()) "Add time (optional)" else time, color = DeepTeal)
+            Text(if (time.isBlank()) "Add time (optional)" else formatTime(time), color = DeepTeal)
         }
         if (time.isNotBlank()) TextButton(onClick = { onTimeChange("") }) { Text("Clear time · All day") }
     }
@@ -828,10 +962,16 @@ private fun entriesForDate(events: List<TrackedEvent>, date: LocalDate): List<Pa
 
 private fun suggestedEvent(text: String): TrackedEvent {
     if (text.isBlank()) return TrackedEvent(name = "")
-    val lines = text.lines().map(String::trim).filter(String::isNotBlank)
-    val url = Regex("https?://\\S+", RegexOption.IGNORE_CASE).find(text)?.value?.trimEnd('.', ',', ')', ']') ?: ""
-    val title = lines.firstOrNull { !it.contains(url) }?.take(100).orEmpty()
-    return TrackedEvent(name = title, link = url, sourceText = text)
+    val suggestions = AnnouncementParser.parse(text)
+    return TrackedEvent(
+        name = suggestions.name,
+        eventDate = suggestions.eventDate,
+        eventTime = suggestions.eventTime,
+        registrationDeadline = suggestions.registrationDeadline,
+        deadlineTime = suggestions.deadlineTime,
+        link = suggestions.link,
+        sourceText = text,
+    )
 }
 
 private fun loadEvents(context: Context): List<TrackedEvent> {
