@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -97,6 +98,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
@@ -789,8 +791,67 @@ private fun EventEditor(
         mutableStateOf(if (initial == null && incomingText.isBlank()) EventEditorStep.PASTE else EventEditorStep.DETAILS)
     }
     val context = LocalContext.current
+    val pasteAnnouncement: () -> Unit = {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        val pastedText = clipboard?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(context)
+            ?.toString()
+            .orEmpty()
+        if (pastedText.isBlank()) {
+            clipboardMessage = "Copy the WhatsApp message first, then tap here."
+        } else {
+            source = pastedText
+            val suggestions = suggestedEvent(pastedText)
+            name = suggestions.name
+            link = suggestions.link
+            eventDate = suggestions.eventDate
+            eventTime = suggestions.eventTime
+            deadline = suggestions.registrationDeadline
+            deadlineTime = suggestions.deadlineTime
+            clipboardMessage = "Message pasted. Review the detected details before saving."
+            step = EventEditorStep.DETAILS
+        }
+    }
 
-    AlertDialog(
+    if (step == EventEditorStep.PASTE) {
+        Dialog(onDismissRequest = onDismiss) {
+            Surface(
+                modifier = Modifier.widthIn(min = 280.dp, max = 340.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = Paper,
+                tonalElevation = 6.dp,
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text("Add an event", color = Ink, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = DeepTeal)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "In WhatsApp, long-press an event announcement and tap Copy.",
+                            color = DeepTeal,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Button(onClick = pasteAnnouncement, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Paste WhatsApp message")
+                    }
+                    if (clipboardMessage.isNotBlank()) {
+                        Text(clipboardMessage, color = DeepTeal, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onDismiss) { Text("Cancel") }
+                    }
+                }
+            }
+        }
+    } else AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
@@ -806,9 +867,9 @@ private fun EventEditor(
         text = {
             when (step) {
                 EventEditorStep.PASTE -> Column(
-                    Modifier.fillMaxWidth().heightIn(min = 72.dp),
+                    Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, tint = DeepTeal)
@@ -820,29 +881,7 @@ private fun EventEditor(
                         )
                     }
                     Button(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                            val pastedText = clipboard?.primaryClip
-                                ?.takeIf { it.itemCount > 0 }
-                                ?.getItemAt(0)
-                                ?.coerceToText(context)
-                                ?.toString()
-                                .orEmpty()
-                            if (pastedText.isBlank()) {
-                                clipboardMessage = "Copy the WhatsApp message first, then tap here."
-                            } else {
-                                source = pastedText
-                                val suggestions = suggestedEvent(pastedText)
-                                name = suggestions.name
-                                link = suggestions.link
-                                eventDate = suggestions.eventDate
-                                eventTime = suggestions.eventTime
-                                deadline = suggestions.registrationDeadline
-                                deadlineTime = suggestions.deadlineTime
-                                clipboardMessage = "Message pasted. Review the detected details before saving."
-                                step = EventEditorStep.DETAILS
-                            }
-                        },
+                        onClick = pasteAnnouncement,
                         shape = RoundedCornerShape(14.dp),
                     ) {
                         Icon(Icons.Default.ContentPaste, contentDescription = null)
@@ -850,21 +889,20 @@ private fun EventEditor(
                         Text("Paste WhatsApp message")
                     }
                     if (clipboardMessage.isNotBlank()) {
-                        Spacer(Modifier.height(10.dp))
                         Text(clipboardMessage, color = DeepTeal, style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
                 EventEditorStep.DETAILS -> Column(
-                    Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (source.isNotBlank()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("Original WhatsApp message", color = DeepTeal, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                             Surface(color = Color(0xFFE7EEE8), shape = RoundedCornerShape(12.dp)) {
                                 SelectionContainer {
-                                    Text(source, modifier = Modifier.padding(12.dp), color = Ink, style = MaterialTheme.typography.bodyMedium)
+                                    Text(source, modifier = Modifier.padding(10.dp), color = Ink, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
                         }
@@ -884,8 +922,8 @@ private fun EventEditor(
                 }
 
                 EventEditorStep.NOTES -> Column(
-                    Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 420.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text("Add any extra details you want to remember.", color = DeepTeal, style = MaterialTheme.typography.bodyMedium)
                     OutlinedTextField(
@@ -901,7 +939,7 @@ private fun EventEditor(
         },
         confirmButton = {
             when (step) {
-                EventEditorStep.PASTE -> Unit
+                EventEditorStep.PASTE -> TextButton(onClick = onDismiss) { Text("Cancel") }
                 EventEditorStep.DETAILS -> Button(
                     onClick = {
                         onSave(suggested.copy(
@@ -920,7 +958,7 @@ private fun EventEditor(
         },
         dismissButton = {
             when (step) {
-                EventEditorStep.PASTE -> TextButton(onClick = onDismiss) { Text("Cancel") }
+                EventEditorStep.PASTE -> Unit
                 EventEditorStep.DETAILS -> TextButton(onClick = onDismiss) { Text("Cancel") }
                 EventEditorStep.NOTES -> TextButton(onClick = { step = EventEditorStep.DETAILS }) { Text("Back") }
             }
