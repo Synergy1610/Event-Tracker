@@ -1,33 +1,37 @@
-# Event Tracker
+# TreeTrack
 
-Event Tracker helps you keep campus event announcements, registration deadlines, and links organized in one place.
+TreeTrack helps you organize campus events, registration deadlines, and registration links in one place.
 
 ## Features
 
-- Paste a copied WhatsApp announcement and review suggested event details.
-- Automatically suggests the event name, dates, times, and first link it detects. Review these suggestions before saving.
-- Add optional event and registration dates, times, and personal notes.
-- View saved events in a list sorted by registration deadline, or in a calendar.
-- Edit or delete saved events.
+- Paste a WhatsApp announcement and review suggested event details before saving.
+- Detects event and deadline dates, nearby times, and registration links.
+- Skips YouTube links and prefers links labeled for registration or forms.
+- Set optional local reminders for saved event dates and registration deadlines:
+  - 9:00 AM the day before
+  - 7:00 AM on the date
+- View events in a list sorted by registration deadline or in a calendar.
+- Edit or delete saved events, and add personal notes.
 - Tap a registration link to open it, or long-press it to copy it.
-- Store events locally on your device; no account or backend is required.
+- Keep events on your device; no account or backend is required.
 
-Date and time detection is heuristic. It may not interpret every announcement correctly, so check the suggested details before saving.
+Announcement parsing is not 100% accurate, so check suggested details before saving. Reminders require notification permission and a saved date.
 
 ## Getting started
 
 1. Install [Android Studio](https://developer.android.com/studio).
-2. Open this project in Android Studio and let Gradle sync.
+2. Open this project in Android Studio and sync Gradle.
 3. Use Java 17 and install the Android SDK requested by Android Studio.
 4. Select an emulator or connected Android device and press **Run**.
 
 ## Project details
-- Android app built with Kotlin and Jetpack Compose.
-- Minimum Android version: Android 8.0 (API 26).
-- Events are stored locally on-device.
+- Kotlin and Jetpack Compose
+- Minimum Android version: Android 8.0 (API 26)
+- Current app version: 3.0
+- Events are stored locally on-device
 
-## APK downloads
+### APK downloads
 An APK release is not available yet.
 
-## License
+### License
 MIT
