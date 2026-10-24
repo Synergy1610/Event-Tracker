@@ -53,4 +53,17 @@ Time: 9:30 AM""",
         assertEquals("20/11/2026", suggestions.eventDate)
         assertEquals("09:30", suggestions.eventTime)
     }
+
+    @Test
+    fun skipsYoutubeAndPrefersRegistrationFormLink() {
+        val suggestions = AnnouncementParser.parse(
+            """Campus Showcase
+Watch the promo: https://youtu.be/abc123
+Register here: https://forms.gle/event-form
+Event date: 25 Nov 2026""",
+            today = LocalDate.of(2026, 1, 1),
+        )
+
+        assertEquals("https://forms.gle/event-form", suggestions.link)
+    }
 }

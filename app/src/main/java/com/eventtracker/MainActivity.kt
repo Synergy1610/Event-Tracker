@@ -1,14 +1,19 @@
 package com.eventtracker
 
+import android.Manifest
 import android.content.Context
 import android.content.ClipData
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
@@ -47,6 +52,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -62,6 +68,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -92,6 +99,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationManagerCompat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -108,7 +117,7 @@ private val Paper = Color(0xFFF7F9F6)
 private val DateFormat = DateTimeFormatter.ofPattern("d/M/uuuu", Locale.getDefault())
 private val DisplayDateFormat = DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
 
-private data class TrackedEvent(
+data class TrackedEvent(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val eventDate: String = "",
@@ -147,12 +156,49 @@ private fun EventTrackerApp(sharedText: String) {
     val events = remember {
         mutableStateListOf<TrackedEvent>().apply { addAll(loadEvents(context)) }
     }
+    var notificationsEnabled by remember {
+        mutableStateOf(context.getSharedPreferences("events", Context.MODE_PRIVATE).getBoolean("notificationsEnabled", false))
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notificationsEnabled = granted
+        context.getSharedPreferences("events", Context.MODE_PRIVATE).edit()
+            .putBoolean("notificationsEnabled", granted).apply()
+        Toast.makeText(
+            context,
+            if (granted) "Event reminders enabled." else "Notification permission is needed for reminders.",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+    val onNotificationsChange: (Boolean) -> Unit = { enabled ->
+        if (!enabled) {
+            notificationsEnabled = false
+            context.getSharedPreferences("events", Context.MODE_PRIVATE).edit()
+                .putBoolean("notificationsEnabled", false).apply()
+            Toast.makeText(context, "Event reminders turned off.", Toast.LENGTH_SHORT).show()
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            Toast.makeText(context, "Enable TreeTrack notifications in Android Settings.", Toast.LENGTH_SHORT).show()
+        } else {
+            notificationsEnabled = true
+            context.getSharedPreferences("events", Context.MODE_PRIVATE).edit()
+                .putBoolean("notificationsEnabled", true).apply()
+            Toast.makeText(context, "Event reminders enabled.", Toast.LENGTH_SHORT).show()
+        }
+    }
     var screen by remember { mutableStateOf(Screen.HOME) }
     var showEditor by remember(sharedText) { mutableStateOf(sharedText.isNotBlank()) }
     var editingEvent by remember { mutableStateOf<TrackedEvent?>(null) }
     var selectedEvent by remember { mutableStateOf<TrackedEvent?>(null) }
 
-    LaunchedEffect(events.toList()) { saveEvents(context, events) }
+    LaunchedEffect(events.toList()) {
+        saveEvents(context, events)
+        EventReminderScheduler.sync(context, events.toList(), notificationsEnabled)
+    }
     BackHandler(enabled = screen == Screen.EVENTS) { screen = Screen.HOME }
 
     MaterialTheme(
@@ -191,6 +237,8 @@ private fun EventTrackerApp(sharedText: String) {
                     HomeScreen(
                         eventCount = events.size,
                         nextEvent = events.sortedBy { parseDate(it.eventDate) }.firstOrNull { parseDate(it.eventDate) != null },
+                        notificationsEnabled = notificationsEnabled,
+                        onNotificationsChange = onNotificationsChange,
                         onViewEvents = { screen = Screen.EVENTS },
                         onAddEvent = { editingEvent = null; showEditor = true },
                     )
@@ -225,6 +273,7 @@ private fun EventTrackerApp(sharedText: String) {
                     showEditor = true
                 },
                 onDelete = {
+                    EventReminderScheduler.cancel(context, event.id)
                     events.removeAll { it.id == event.id }
                     selectedEvent = null
                 },
@@ -237,9 +286,12 @@ private fun EventTrackerApp(sharedText: String) {
 private fun HomeScreen(
     eventCount: Int,
     nextEvent: TrackedEvent?,
+    notificationsEnabled: Boolean,
+    onNotificationsChange: (Boolean) -> Unit,
     onViewEvents: () -> Unit,
     onAddEvent: () -> Unit,
 ) {
+    var showReminderInfo by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
     ) {
@@ -250,7 +302,7 @@ private fun HomeScreen(
         ) {
             Image(
                 painter = painterResource(R.drawable.ic_launcher_foreground),
-                contentDescription = "Event Tracker tree logo",
+                contentDescription = "TreeTrack logo",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit,
             )
@@ -295,7 +347,7 @@ private fun HomeScreen(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
         Button(
             onClick = onViewEvents,
             modifier = Modifier.fillMaxWidth().height(60.dp),
@@ -316,20 +368,43 @@ private fun HomeScreen(
             Spacer(Modifier.width(10.dp))
             Text("Add event", color = DeepTeal, style = MaterialTheme.typography.titleMedium)
         }
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(16.dp))
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFFDCEBE0)),
         ) {
-            Text(
-                "Tip: Copy a WhatsApp event message, then tap Add event → Paste WhatsApp message.",
-                modifier = Modifier.padding(16.dp),
-                color = DeepTeal,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Event reminders", color = DeepTeal)
+                    IconButton(onClick = { showReminderInfo = true }, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = "Reminder schedule information",
+                            tint = DeepTeal.copy(alpha = 0.65f),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Switch(checked = notificationsEnabled, onCheckedChange = onNotificationsChange)
+                }
+            }
         }
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(24.dp))
+    }
+    if (showReminderInfo) {
+        AlertDialog(
+            onDismissRequest = { showReminderInfo = false },
+            title = { Text("Reminder schedule", color = Ink, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "With reminders enabled, saved event dates and registration deadlines get a reminder at 9:00 AM the day before and 7:00 AM on the date.",
+                    color = Ink,
+                )
+            },
+            confirmButton = { TextButton(onClick = { showReminderInfo = false }) { Text("Got it") } },
+            containerColor = Paper,
+        )
     }
 }
 
@@ -739,7 +814,7 @@ private fun EventEditor(
                         Icon(Icons.Default.ContentCopy, contentDescription = null, tint = DeepTeal)
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "In WhatsApp, long-press the message and tap Copy.",
+                            "In WhatsApp, long-press an event announcement and tap Copy.",
                             color = DeepTeal,
                             style = MaterialTheme.typography.bodySmall,
                         )

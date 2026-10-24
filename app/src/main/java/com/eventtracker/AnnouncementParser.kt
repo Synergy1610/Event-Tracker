@@ -17,6 +17,8 @@ internal data class AnnouncementSuggestions(
 /** Offline, heuristic extraction only. All returned values are suggestions for the user to review. */
 internal object AnnouncementParser {
     private val urlRegex = Regex("https?://\\S+", RegexOption.IGNORE_CASE)
+    private val youtubeUrlRegex = Regex("(?i)^https?://(?:www\\.)?(?:youtube\\.com|youtu\\.be|m\\.youtube\\.com|music\\.youtube\\.com|youtube-nocookie\\.com)(?:[/#?]|$)")
+    private val registrationLinkContext = Regex("(?i)\\b(register|registration|sign\\s*up|apply|application|form|enrol|enroll)\\b")
     private const val MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
     private val dayMonthRegex = Regex("(?i)\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+($MONTHS)\\.?[,]?\\s*(\\d{4})?\\b")
     private val monthDayRegex = Regex("(?i)\\b($MONTHS)\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?[,]?\\s*(\\d{4})?\\b")
@@ -62,7 +64,14 @@ internal object AnnouncementParser {
         val selectedEvent = event ?: unknown.firstOrNull()
         val selectedDeadline = deadline ?: unknown.firstOrNull { it != selectedEvent }
 
-        val link = urlRegex.find(text)?.value?.trimEnd('.', ',', ';', ':', ')', ']', '!').orEmpty()
+        val links = urlRegex.findAll(text).map { match ->
+            match.value.trimEnd('.', ',', ';', ':', ')', ']', '!') to match.range.first
+        }.filter { (link, _) -> link.isNotBlank() && !youtubeUrlRegex.containsMatchIn(link) }.toList()
+        val link = links.firstOrNull { (_, position) ->
+            val lineStart = text.lastIndexOf('\n', position).let { if (it < 0) 0 else it + 1 }
+            val lineEnd = text.indexOf('\n', position).let { if (it < 0) text.length else it }
+            registrationLinkContext.containsMatchIn(text.substring(lineStart, lineEnd))
+        }?.first ?: links.firstOrNull()?.first.orEmpty()
         val title = lines.asSequence()
             .map { it.replace(urlRegex, "").trim().trim('*', '_', '-', ' ', '\t') }
             .firstOrNull { it.isNotBlank() }
