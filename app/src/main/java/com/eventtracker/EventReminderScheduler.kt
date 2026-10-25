@@ -19,6 +19,7 @@ import androidx.work.WorkerParameters
 import androidx.work.WorkManager
 import java.time.Duration
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -155,6 +156,50 @@ class EventReminderWorker(context: Context, parameters: WorkerParameters) : Work
         val kind = inputData.getString("reminder_kind") ?: return Result.failure()
         val reminderDay = inputData.getString("reminder_day") ?: return Result.failure()
         EventReminderScheduler.showReminder(applicationContext, eventId, eventName, kind, reminderDay)
+        return Result.success()
+    }
+}
+
+internal object EventExpiryScheduler {
+    private const val WORK_NAME = "event-tracker:expire-completed-events"
+
+    fun schedule(context: Context, events: List<TrackedEvent>) {
+        val workManager = WorkManager.getInstance(context)
+        val today = LocalDate.now()
+        val hasExpiredEvents = events.any { event ->
+            parseDate(event.eventDate)?.isBefore(today) == true
+        }
+        val nextTransitionDate = events.flatMap { event ->
+            listOfNotNull(parseDate(event.eventDate), parseDate(event.registrationDeadline))
+        }.filterNot { it.isBefore(today) }
+            .minOrNull()
+
+        if (!hasExpiredEvents && nextTransitionDate == null) {
+            workManager.cancelUniqueWork(WORK_NAME)
+            return
+        }
+
+        val runAt = if (hasExpiredEvents) {
+            java.time.Instant.now()
+        } else {
+            nextTransitionDate!!.plusDays(1).atStartOfDay().plusMinutes(5)
+                .atZone(ZoneId.systemDefault()).toInstant()
+        }
+        val delay = Duration.between(java.time.Instant.now(), runAt).toMillis().coerceAtLeast(0L)
+        val request = OneTimeWorkRequestBuilder<EventExpiryWorker>()
+            .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+            .build()
+        workManager.enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    private fun parseDate(value: String): LocalDate? = runCatching { LocalDate.parse(value) }.getOrNull()
+        ?: runCatching { LocalDate.parse(value, DateTimeFormatter.ofPattern("d/M/uuuu", Locale.getDefault())) }.getOrNull()
+}
+
+class EventExpiryWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
+    override fun doWork(): Result {
+        val events = cleanupExpiredEvents(applicationContext)
+        EventExpiryScheduler.schedule(applicationContext, events)
         return Result.success()
     }
 }

@@ -10,7 +10,9 @@ TreeTrack helps you organize campus events, registration deadlines, and registra
 - Set optional local reminders for saved event dates and registration deadlines:
   - 9:00 AM the day before
   - 7:00 AM on the date
-- View events in a list sorted by registration deadline or in a calendar.
+- View events in a list sorted by the next active date or in a calendar.
+- Move registration-closed events with no event date into a separate pending-date section; when an event date is added, sort the event back into the main list.
+- Automatically remove events after their event date has passed.
 - Edit or delete saved events, and add personal notes.
 - Tap a registration link to open it, or long-press it to copy it.
 - Keep events on your device; no account or backend is required.
@@ -27,7 +29,7 @@ Announcement parsing is not 100% accurate, so check suggested details before sav
 ## Project details
 - Kotlin and Jetpack Compose
 - Minimum Android version: Android 8.0 (API 26)
-- Current app version: 3.0
+- Current app version: 4.0
 - Events are stored locally on-device
 
 ### APK downloads

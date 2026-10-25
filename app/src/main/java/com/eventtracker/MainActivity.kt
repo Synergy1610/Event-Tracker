@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
@@ -61,6 +63,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -78,6 +81,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,11 +98,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.content.ContextCompat
@@ -117,6 +126,7 @@ private val Green = Color(0xFF2A835F)
 private val Sage = Color(0xFF8BBB92)
 private val Paper = Color(0xFFF7F9F6)
 private val DateFormat = DateTimeFormatter.ofPattern("d/M/uuuu", Locale.getDefault())
+private val DateInputDisplayFormat = DateTimeFormatter.ofPattern("dd/MM/uuuu", Locale.getDefault())
 private val DisplayDateFormat = DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
 
 data class TrackedEvent(
@@ -131,7 +141,7 @@ data class TrackedEvent(
     val sourceText: String = "",
 )
 
-private enum class Screen { HOME, EVENTS }
+private enum class Screen { HOME, EVENTS, CHANGELOG }
 private enum class EventsTab { LIST, CALENDAR }
 private enum class EventEditorStep { PASTE, DETAILS, NOTES }
 
@@ -156,7 +166,32 @@ class MainActivity : ComponentActivity() {
 private fun EventTrackerApp(sharedText: String) {
     val context = LocalContext.current
     val events = remember {
-        mutableStateListOf<TrackedEvent>().apply { addAll(loadEvents(context)) }
+        mutableStateListOf<TrackedEvent>().apply { addAll(cleanupExpiredEvents(context)) }
+    }
+    var today by remember { mutableStateOf(LocalDate.now()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                today = LocalDate.now()
+                val refreshedEvents = cleanupExpiredEvents(context)
+                events.clear()
+                events.addAll(refreshedEvents)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = java.time.ZonedDateTime.now()
+            val nextRefresh = LocalDate.now().plusDays(1).atStartOfDay(now.zone).plusMinutes(1)
+            delay(java.time.Duration.between(now, nextRefresh).toMillis().coerceAtLeast(1_000L))
+            today = LocalDate.now()
+            val refreshedEvents = cleanupExpiredEvents(context)
+            events.clear()
+            events.addAll(refreshedEvents)
+        }
     }
     var notificationsEnabled by remember {
         mutableStateOf(context.getSharedPreferences("events", Context.MODE_PRIVATE).getBoolean("notificationsEnabled", false))
@@ -197,11 +232,12 @@ private fun EventTrackerApp(sharedText: String) {
     var editingEvent by remember { mutableStateOf<TrackedEvent?>(null) }
     var selectedEvent by remember { mutableStateOf<TrackedEvent?>(null) }
 
-    LaunchedEffect(events.toList()) {
+    LaunchedEffect(events.toList(), notificationsEnabled, today) {
         saveEvents(context, events)
         EventReminderScheduler.sync(context, events.toList(), notificationsEnabled)
+        EventExpiryScheduler.schedule(context, events.toList())
     }
-    BackHandler(enabled = screen == Screen.EVENTS) { screen = Screen.HOME }
+    BackHandler(enabled = screen != Screen.HOME) { screen = Screen.HOME }
 
     MaterialTheme(
         colorScheme = lightColorScheme(
@@ -235,21 +271,25 @@ private fun EventTrackerApp(sharedText: String) {
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Paper) {
             Box(Modifier.fillMaxSize().systemBarsPadding()) {
-                if (screen == Screen.HOME) {
-                    HomeScreen(
+                when (screen) {
+                    Screen.HOME -> HomeScreen(
                         eventCount = events.size,
-                        nextEvent = events.sortedBy { parseDate(it.eventDate) }.firstOrNull { parseDate(it.eventDate) != null },
+                        nextEvents = upcomingEventsForDate(events, today),
+                        today = today,
                         notificationsEnabled = notificationsEnabled,
                         onNotificationsChange = onNotificationsChange,
+                        onEventClick = { selectedEvent = it },
+                        onShowChangelog = { screen = Screen.CHANGELOG },
                         onViewEvents = { screen = Screen.EVENTS },
                         onAddEvent = { editingEvent = null; showEditor = true },
                     )
-                } else {
-                    EventsScreen(
+                    Screen.EVENTS -> EventsScreen(
                         events = events,
+                        today = today,
                         onBack = { screen = Screen.HOME },
                         onEventClick = { selectedEvent = it },
                     )
+                    Screen.CHANGELOG -> ChangelogScreen(onBack = { screen = Screen.HOME })
                 }
             }
         }
@@ -261,6 +301,12 @@ private fun EventTrackerApp(sharedText: String) {
                 onSave = { event ->
                     events.removeAll { it.id == event.id }
                     events.add(event)
+                    saveEvents(context, events)
+                    val retainedEvents = cleanupExpiredEvents(context)
+                    if (retainedEvents.size != events.size) {
+                        events.clear()
+                        events.addAll(retainedEvents)
+                    }
                     showEditor = false
                 },
             )
@@ -287,9 +333,12 @@ private fun EventTrackerApp(sharedText: String) {
 @Composable
 private fun HomeScreen(
     eventCount: Int,
-    nextEvent: TrackedEvent?,
+    nextEvents: List<TrackedEvent>,
+    today: LocalDate,
     notificationsEnabled: Boolean,
     onNotificationsChange: (Boolean) -> Unit,
+    onEventClick: (TrackedEvent) -> Unit,
+    onShowChangelog: () -> Unit,
     onViewEvents: () -> Unit,
     onAddEvent: () -> Unit,
 ) {
@@ -299,12 +348,13 @@ private fun HomeScreen(
     ) {
         Spacer(Modifier.height(24.dp))
         Box(
-            modifier = Modifier.size(54.dp).clip(RoundedCornerShape(18.dp)).background(Sage),
+            modifier = Modifier.size(54.dp).clip(RoundedCornerShape(18.dp)).background(Sage)
+                .clickable(onClick = onShowChangelog),
             contentAlignment = Alignment.Center,
         ) {
             Image(
                 painter = painterResource(R.drawable.ic_launcher_foreground),
-                contentDescription = "TreeTrack logo",
+                contentDescription = "Open TreeTrack changelog",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit,
             )
@@ -333,23 +383,42 @@ private fun HomeScreen(
                 Text("YOUR EVENTS", color = Sage, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "$eventCount Events saved.",
+                    "$eventCount ${if (eventCount == 1) "Event" else "Events"} saved.",
                     color = Color.White,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
-                if (nextEvent != null) {
+                if (nextEvents.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
                     HorizontalRule(Color.White.copy(alpha = .2f))
                     Spacer(Modifier.height(14.dp))
                     Text("UP NEXT", color = Sage, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Text(nextEvent.name, color = Color.White, style = MaterialTheme.typography.titleMedium)
-                    Text(formatDate(nextEvent.eventDate), color = Color.White.copy(alpha = .8f))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        nextEvents.forEach { nextEvent ->
+                            val nextDate = primaryDateFor(nextEvent, today)
+                            Column(
+                                Modifier.fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onEventClick(nextEvent) }
+                                    .padding(vertical = 4.dp),
+                            ) {
+                                Text(nextEvent.name, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                                if (nextDate != null) {
+                                    val dateLabel = if (parseDate(nextEvent.registrationDeadline)?.let { !it.isBefore(today) } == true) {
+                                        "Register by"
+                                    } else "Event"
+                                    Text("$dateLabel · ${formatDate(nextDate.toString())}", color = Color.White.copy(alpha = .8f))
+                                } else {
+                                    Text("No date added", color = Color.White.copy(alpha = .8f))
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
         Button(
             onClick = onViewEvents,
             modifier = Modifier.fillMaxWidth().height(60.dp),
@@ -392,7 +461,7 @@ private fun HomeScreen(
                 }
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(8.dp))
     }
     if (showReminderInfo) {
         AlertDialog(
@@ -407,6 +476,87 @@ private fun HomeScreen(
             confirmButton = { TextButton(onClick = { showReminderInfo = false }) { Text("Got it") } },
             containerColor = Paper,
         )
+    }
+}
+
+@Composable
+private fun ChangelogScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink)
+            }
+            Text("Changelog", style = MaterialTheme.typography.headlineSmall, color = Ink, fontWeight = FontWeight.Bold)
+        }
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            ChangelogVersion(
+                version = "Version 1.0 · Event Tracker",
+                changes = listOf("Initial release for saving campus events locally."),
+            )
+            ChangelogVersion(
+                version = "Version 2.0",
+                changes = listOf(
+                    "Paste WhatsApp announcements and review editable event details.",
+                    "Track event dates, registration deadlines, times, and notes.",
+                    "Browse events in list or calendar view; edit or delete saved events.",
+                    "Open or copy registration links; skip YouTube links and prefer registration or form links.",
+                    "Added local reminders for event dates and registration deadlines.",
+                ),
+            )
+            ChangelogVersion(
+                version = "Version 3.0 · TreeTrack",
+                changes = listOf(
+                    "Renamed the app to TreeTrack.",
+                    "Added a homepage reminders toggle for reminders at 9:00 AM the day before and 7:00 AM on the date.",
+                    "Added reminder schedule information on the homepage.",
+                ),
+            )
+            ChangelogVersion(
+                version = "Version 4.0",
+                changes = listOf(
+                    "Sort events by their next relevant date: registration deadline first, then event date after the deadline passes.",
+                    "Move registration-closed events with no event date into a separate pending-date section.",
+                    "Automatically remove events after their event date has passed.",
+                    "Show upcoming items on the homepage and stack items sharing the nearest date.",
+                    "Added manual event entry and improved date entry, calendar, and event details access.",
+                ),
+            )
+            Text(
+                text = "View the TreeTrack project on GitHub",
+                modifier = Modifier.fillMaxWidth().clickable {
+                    runCatching { uriHandler.openUri("https://github.com/Synergy1610/Event-Tracker") }
+                        .onFailure { Toast.makeText(context, "Could not open GitHub.", Toast.LENGTH_SHORT).show() }
+                }.padding(vertical = 12.dp),
+                color = Green,
+                style = MaterialTheme.typography.bodyMedium,
+                textDecoration = TextDecoration.Underline,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ChangelogVersion(version: String, changes: List<String>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(version, color = DeepTeal, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            changes.forEach { change ->
+                Text("• $change", color = Ink, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
     }
 }
 
@@ -442,7 +592,7 @@ private fun TreeIllustration() {
 }
 
 @Composable
-private fun EventsScreen(events: List<TrackedEvent>, onBack: () -> Unit, onEventClick: (TrackedEvent) -> Unit) {
+private fun EventsScreen(events: List<TrackedEvent>, today: LocalDate, onBack: () -> Unit, onEventClick: (TrackedEvent) -> Unit) {
     var selectedTab by remember { mutableStateOf(EventsTab.LIST) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Row(
@@ -458,8 +608,8 @@ private fun EventsScreen(events: List<TrackedEvent>, onBack: () -> Unit, onEvent
         }
         Spacer(Modifier.height(16.dp))
         when (selectedTab) {
-            EventsTab.LIST -> EventList(events, onEventClick, Modifier.weight(1f))
-            EventsTab.CALENDAR -> EventCalendar(events, onEventClick, Modifier.weight(1f))
+            EventsTab.LIST -> EventList(events, today, onEventClick, Modifier.weight(1f))
+            EventsTab.CALENDAR -> EventCalendar(events, today, onEventClick, Modifier.weight(1f))
         }
     }
 }
@@ -477,13 +627,40 @@ private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun EventList(events: List<TrackedEvent>, onEventClick: (TrackedEvent) -> Unit, modifier: Modifier = Modifier) {
-    if (events.isEmpty()) {
+private fun EventList(events: List<TrackedEvent>, today: LocalDate, onEventClick: (TrackedEvent) -> Unit, modifier: Modifier = Modifier) {
+    val activeEvents = sortedActiveEvents(events, today)
+    val pendingEvents = sortedPendingDateEvents(events, today)
+    if (activeEvents.isEmpty() && pendingEvents.isEmpty()) {
         EmptyEvents(modifier)
     } else {
-        LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(events.sortedWith(compareBy<TrackedEvent> { parseDate(it.registrationDeadline) ?: LocalDate.MAX }.thenBy { it.name }), key = { it.id }) {
-                EventCard(it, onClick = { onEventClick(it) })
+        LazyColumn(
+            modifier = modifier,
+            contentPadding = PaddingValues(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (activeEvents.isEmpty() && pendingEvents.isNotEmpty()) {
+                item(key = "no-upcoming-events") {
+                    Text("No upcoming events.", color = DeepTeal, modifier = Modifier.padding(vertical = 8.dp))
+                }
+            }
+            items(activeEvents, key = { it.id }) {
+                EventCard(it, today, onClick = { onEventClick(it) })
+            }
+            if (pendingEvents.isNotEmpty()) {
+                item(key = "closed-registration-divider") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalRule(DeepTeal.copy(alpha = 0.18f))
+                        Text(
+                            "Registration closed · Event date pending",
+                            color = DeepTeal.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+                }
+                items(pendingEvents, key = { "pending-${it.id}" }) {
+                    EventCard(it, today, onClick = { onEventClick(it) })
+                }
             }
         }
     }
@@ -497,7 +674,7 @@ private fun EmptyEvents(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun EventCard(event: TrackedEvent, onClick: () -> Unit) {
+private fun EventCard(event: TrackedEvent, today: LocalDate, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
@@ -506,8 +683,12 @@ private fun EventCard(event: TrackedEvent, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(event.name, style = MaterialTheme.typography.titleMedium, color = Ink, fontWeight = FontWeight.Bold)
-            if (event.eventDate.isNotBlank()) DateLine("Event", event.eventDate, event.eventTime, Green)
-            if (event.registrationDeadline.isNotBlank()) DateLine("Register by", event.registrationDeadline, event.deadlineTime, DeepTeal)
+            val deadline = parseDate(event.registrationDeadline)
+            val eventDate = parseDate(event.eventDate)
+            val registrationIsNext = deadline != null && !deadline.isBefore(today)
+            if (registrationIsNext) DateLine("Register by", event.registrationDeadline, event.deadlineTime, DeepTeal)
+            if (eventDate != null) DateLine("Event", event.eventDate, event.eventTime, Green)
+            if (!registrationIsNext && deadline != null) DateLine("Register by", event.registrationDeadline, event.deadlineTime, DeepTeal)
             if (event.link.isNotBlank()) RegistrationLinkActions(event.link)
             if (event.notes.isNotBlank()) Text(event.notes, color = Ink.copy(alpha = .8f), style = MaterialTheme.typography.bodyMedium)
         }
@@ -643,9 +824,9 @@ private fun DateLine(label: String, date: String, time: String, color: Color) {
 }
 
 @Composable
-private fun EventCalendar(events: List<TrackedEvent>, onEventClick: (TrackedEvent) -> Unit, modifier: Modifier = Modifier) {
+private fun EventCalendar(events: List<TrackedEvent>, today: LocalDate, onEventClick: (TrackedEvent) -> Unit, modifier: Modifier = Modifier) {
     var displayedMonth by remember { mutableStateOf(YearMonth.now()) }
-    var selectedDate by remember { mutableStateOf(LocalDate.now()) }
+    var selectedDate by remember { mutableStateOf(today) }
     val firstDayOffset = displayedMonth.atDay(1).dayOfWeek.value % 7
     val days: List<LocalDate?> = List(firstDayOffset) { null } +
         (1..displayedMonth.lengthOfMonth()).map { displayedMonth.atDay(it) }
@@ -691,7 +872,7 @@ private fun EventCalendar(events: List<TrackedEvent>, onEventClick: (TrackedEven
                     CalendarDay(
                         date = date,
                         selected = date == selectedDate,
-                        isToday = date == LocalDate.now(),
+                        isToday = date == today,
                         hasEvent = hasEvent,
                         hasDeadline = hasDeadline,
                         onClick = { selectedDate = date },
@@ -842,6 +1023,16 @@ private fun EventEditor(
                         Spacer(Modifier.width(8.dp))
                         Text("Paste WhatsApp message")
                     }
+                    OutlinedButton(
+                        onClick = {
+                            source = ""
+                            step = EventEditorStep.DETAILS
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text("Add Manually", color = DeepTeal)
+                    }
                     if (clipboardMessage.isNotBlank()) {
                         Text(clipboardMessage, color = DeepTeal, style = MaterialTheme.typography.bodySmall)
                     }
@@ -974,11 +1165,10 @@ private fun DateInput(label: String, date: String, onDateChange: (String) -> Uni
     var showTimePicker by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedTextField(
-            value = date,
+            value = parseDate(date)?.format(DateInputDisplayFormat) ?: date,
             onValueChange = onDateChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("$label (DD/MM/YYYY)") },
-            placeholder = { Text("e.g. 24/10/2026") },
             singleLine = true,
             trailingIcon = {
                 IconButton(onClick = { showDatePicker = true }) {
@@ -987,28 +1177,59 @@ private fun DateInput(label: String, date: String, onDateChange: (String) -> Uni
             },
             supportingText = if (date.isNotBlank() && parseDate(date) == null) ({ Text("Enter a valid date or choose it from the calendar.") }) else null,
         )
-        OutlinedButton(onClick = { showTimePicker = true }, shape = RoundedCornerShape(12.dp)) {
-            Icon(Icons.Default.Schedule, contentDescription = null, tint = DeepTeal)
-            Spacer(Modifier.width(8.dp))
-            Text(if (time.isBlank()) "Add time (optional)" else formatTime(time), color = DeepTeal)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = { showTimePicker = true }, shape = RoundedCornerShape(12.dp)) {
+                Icon(Icons.Default.Schedule, contentDescription = null, tint = DeepTeal)
+                Spacer(Modifier.width(8.dp))
+                Text(if (time.isBlank()) "Add time (optional)" else formatTime(time), color = DeepTeal)
+            }
+            if (time.isNotBlank()) {
+                OutlinedButton(
+                    onClick = { onTimeChange("") },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, DeepTeal.copy(alpha = 0.3f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DeepTeal.copy(alpha = 0.8f)),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text("Clear time")
+                }
+            }
         }
-        if (time.isNotBlank()) TextButton(onClick = { onTimeChange("") }) { Text("Clear time · All day") }
     }
 
     if (showDatePicker) {
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = parseDate(date)?.atStartOfDay(ZoneOffset.UTC)?.toInstant()?.toEpochMilli())
+        val screenHeightDp = LocalConfiguration.current.screenHeightDp
+        val pickerMaxHeight = (screenHeightDp - 180).coerceAtLeast(280).dp
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
+            modifier = Modifier.widthIn(max = 400.dp),
             confirmButton = {
                 TextButton(onClick = {
                     pickerState.selectedDateMillis?.let { millis ->
-                        onDateChange(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().format(DateFormat))
+                                onDateChange(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().format(DateInputDisplayFormat))
                     }
                     showDatePicker = false
                 }) { Text("Select") }
             },
             dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
-        ) { DatePicker(state = pickerState) }
+            colors = DatePickerDefaults.colors(containerColor = Paper),
+        ) {
+            Box(
+                Modifier.fillMaxWidth().heightIn(max = pickerMaxHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                DatePicker(
+                    state = pickerState,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = DatePickerDefaults.colors(containerColor = Paper),
+                )
+            }
+        }
     }
     if (showTimePicker) {
         TimePickerDialog(
@@ -1057,6 +1278,44 @@ private fun HorizontalRule(color: Color) {
 private fun parseDate(value: String): LocalDate? = runCatching {
     LocalDate.parse(value.trim(), DateFormat)
 }.getOrNull() ?: runCatching { LocalDate.parse(value.trim()) }.getOrNull()
+
+internal fun isWaitingForEventDate(event: TrackedEvent, today: LocalDate = LocalDate.now()): Boolean {
+    val eventDate = parseDate(event.eventDate)
+    val deadline = parseDate(event.registrationDeadline)
+    return eventDate == null && deadline != null && deadline.isBefore(today)
+}
+
+internal fun primaryDateFor(event: TrackedEvent, today: LocalDate = LocalDate.now()): LocalDate? {
+    val deadline = parseDate(event.registrationDeadline)
+    if (deadline != null && !deadline.isBefore(today)) return deadline
+    return parseDate(event.eventDate) ?: deadline
+}
+
+internal fun sortedActiveEvents(events: List<TrackedEvent>, today: LocalDate = LocalDate.now()): List<TrackedEvent> =
+    events.filterNot { isWaitingForEventDate(it, today) }
+        .sortedWith(compareBy<TrackedEvent> { primaryDateFor(it, today) ?: LocalDate.MAX }.thenBy { it.name.lowercase(Locale.getDefault()) })
+
+internal fun upcomingEventsForDate(events: List<TrackedEvent>, today: LocalDate = LocalDate.now()): List<TrackedEvent> {
+    val sorted = sortedActiveEvents(events, today)
+    val firstDate = sorted.firstOrNull()?.let { primaryDateFor(it, today) } ?: return sorted.take(1)
+    return sorted.takeWhile { primaryDateFor(it, today) == firstDate }
+}
+
+internal fun sortedPendingDateEvents(events: List<TrackedEvent>, today: LocalDate = LocalDate.now()): List<TrackedEvent> =
+    events.filter { isWaitingForEventDate(it, today) }
+        .sortedWith(compareByDescending<TrackedEvent> { parseDate(it.registrationDeadline) }.thenBy { it.name.lowercase(Locale.getDefault()) })
+
+internal fun cleanupExpiredEvents(context: Context): List<TrackedEvent> {
+    val savedEvents = loadEvents(context)
+    val today = LocalDate.now()
+    val expiredEvents = savedEvents.filter { parseDate(it.eventDate)?.isBefore(today) == true }
+    val retainedEvents = savedEvents.filterNot { parseDate(it.eventDate)?.isBefore(today) == true }
+    if (expiredEvents.isNotEmpty()) {
+        expiredEvents.forEach { EventReminderScheduler.cancel(context, it.id) }
+        saveEvents(context, retainedEvents)
+    }
+    return retainedEvents
+}
 
 private fun normalizeDate(value: String): String = parseDate(value)?.toString().orEmpty()
 
