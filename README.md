@@ -32,8 +32,8 @@ Announcement parsing is not 100% accurate, so check suggested details before sav
 - Current app version: 4.0
 - Events are stored locally on-device
 
-### APK downloads
-An APK release is not available yet.
+### Download
+Download the [TreeTrack v4.0 APK](https://github.com/Synergy1610/Event-Tracker/releases/latest) from GitHub Releases.
 
 ### License
 MIT
