@@ -29,11 +29,11 @@ Announcement parsing is not 100% accurate, so check suggested details before sav
 ## Project details
 - Kotlin and Jetpack Compose
 - Minimum Android version: Android 8.0 (API 26)
-- Current app version: 4.0
+- Current app version: 4.1
 - Events are stored locally on-device
 
 ### Download
-Download the [TreeTrack v4.0 APK](https://github.com/Synergy1610/Event-Tracker/releases/latest) from GitHub Releases.
+Download the [latest TreeTrack APK](https://github.com/Synergy1610/Event-Tracker/releases/latest) from GitHub Releases.
 
 ### License
 MIT

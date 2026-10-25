@@ -535,6 +535,10 @@ private fun ChangelogScreen(onBack: () -> Unit) {
                     "Added manual event entry and improved date entry, calendar, and event details access.",
                 ),
             )
+            ChangelogVersion(
+                version = "Version 4.1",
+                changes = listOf("Fixed the app to keep its light appearance when the device is in dark mode."),
+            )
             Text(
                 text = "View the TreeTrack project on GitHub",
                 modifier = Modifier.fillMaxWidth().clickable {
