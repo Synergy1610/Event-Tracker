@@ -1,4 +1,4 @@
-# TreeTrack
+# TreeTrack 🌳
 
 TreeTrack helps you organize campus events, registration deadlines, and registration links in one place.
 
