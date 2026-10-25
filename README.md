@@ -17,6 +17,16 @@ TreeTrack helps you organize campus events, registration deadlines, and registra
 - Tap a registration link to open it, or long-press it to copy it.
 - Keep events on your device; no account or backend is required.
 
+## Screenshots
+
+| Home | Add an event |
+| --- | --- |
+| ![TreeTrack home screen](screenshots/ss1.jpg) | ![Add event options](screenshots/ss2.jpg) |
+
+| Event list | Calendar |
+| --- | --- |
+| ![Saved events list](screenshots/ss3.jpg) | ![Events calendar](screenshots/ss4.jpg) |
+
 Announcement parsing is not 100% accurate, so check suggested details before saving. Reminders require notification permission and a saved date.
 
 ## Getting started
