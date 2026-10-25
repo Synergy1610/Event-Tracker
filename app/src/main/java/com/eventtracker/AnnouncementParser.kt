@@ -137,20 +137,23 @@ internal object AnnouncementParser {
         }
     }
 
-    private fun monthNumber(value: String): Int? = when (value.lowercase(Locale.ROOT).take(3)) {
-        "jan" -> 1
-        "feb" -> 2
-        "mar" -> 3
-        "apr" -> 4
-        "may" -> 5
-        "jun" -> 6
-        "jul" -> 7
-        "aug" -> 8
-        "sep" -> 9
-        "oct" -> 10
-        "nov" -> 11
-        "dec" -> 12
-        else -> null
+    private fun monthNumber(value: String): Int? {
+        value.toIntOrNull()?.let { month -> return month.takeIf { it in 1..12 } }
+        return when (value.lowercase(Locale.ROOT).take(3)) {
+            "jan" -> 1
+            "feb" -> 2
+            "mar" -> 3
+            "apr" -> 4
+            "may" -> 5
+            "jun" -> 6
+            "jul" -> 7
+            "aug" -> 8
+            "sep" -> 9
+            "oct" -> 10
+            "nov" -> 11
+            "dec" -> 12
+            else -> null
+        }
     }
 
     private fun classify(line: String, dateStart: Int): Kind {

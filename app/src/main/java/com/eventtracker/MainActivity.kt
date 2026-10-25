@@ -23,6 +23,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -169,11 +170,19 @@ private fun EventTrackerApp(sharedText: String) {
         mutableStateListOf<TrackedEvent>().apply { addAll(cleanupExpiredEvents(context)) }
     }
     var today by remember { mutableStateOf(LocalDate.now()) }
+    var notificationsEnabled by remember {
+        val notificationsWereEnabled = context.getSharedPreferences("events", Context.MODE_PRIVATE)
+            .getBoolean("notificationsEnabled", false)
+        mutableStateOf(notificationsWereEnabled && notificationsAllowed(context))
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 today = LocalDate.now()
+                val notificationsWereEnabled = context.getSharedPreferences("events", Context.MODE_PRIVATE)
+                    .getBoolean("notificationsEnabled", false)
+                notificationsEnabled = notificationsWereEnabled && notificationsAllowed(context)
                 val refreshedEvents = cleanupExpiredEvents(context)
                 events.clear()
                 events.addAll(refreshedEvents)
@@ -192,9 +201,6 @@ private fun EventTrackerApp(sharedText: String) {
             events.clear()
             events.addAll(refreshedEvents)
         }
-    }
-    var notificationsEnabled by remember {
-        mutableStateOf(context.getSharedPreferences("events", Context.MODE_PRIVATE).getBoolean("notificationsEnabled", false))
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -858,25 +864,28 @@ private fun EventCalendar(events: List<TrackedEvent>, today: LocalDate, onEventC
                     style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             }
         }
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(7),
-            modifier = Modifier.fillMaxWidth().height(250.dp),
-            userScrollEnabled = false,
-        ) {
-            items(days) { date ->
-                if (date == null) {
-                    Box(Modifier.aspectRatio(1f))
-                } else {
-                    val hasEvent = events.any { parseDate(it.eventDate) == date }
-                    val hasDeadline = events.any { parseDate(it.registrationDeadline) == date }
-                    CalendarDay(
-                        date = date,
-                        selected = date == selectedDate,
-                        isToday = date == today,
-                        hasEvent = hasEvent,
-                        hasDeadline = hasDeadline,
-                        onClick = { selectedDate = date },
-                    )
+        val calendarRowCount = (days.size + 6) / 7
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(7),
+                modifier = Modifier.fillMaxWidth().height(maxWidth * (calendarRowCount / 7f)),
+                userScrollEnabled = false,
+            ) {
+                items(days) { date ->
+                    if (date == null) {
+                        Box(Modifier.aspectRatio(1f))
+                    } else {
+                        val hasEvent = events.any { parseDate(it.eventDate) == date }
+                        val hasDeadline = events.any { parseDate(it.registrationDeadline) == date }
+                        CalendarDay(
+                            date = date,
+                            selected = date == selectedDate,
+                            isToday = date == today,
+                            hasEvent = hasEvent,
+                            hasDeadline = hasDeadline,
+                            onClick = { selectedDate = date },
+                        )
+                    }
                 }
             }
         }
@@ -1278,6 +1287,11 @@ private fun HorizontalRule(color: Color) {
 private fun parseDate(value: String): LocalDate? = runCatching {
     LocalDate.parse(value.trim(), DateFormat)
 }.getOrNull() ?: runCatching { LocalDate.parse(value.trim()) }.getOrNull()
+
+private fun notificationsAllowed(context: Context): Boolean =
+    (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
 
 internal fun isWaitingForEventDate(event: TrackedEvent, today: LocalDate = LocalDate.now()): Boolean {
     val eventDate = parseDate(event.eventDate)
