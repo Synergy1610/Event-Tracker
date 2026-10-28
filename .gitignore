@@ -11,6 +11,16 @@ local.properties
 # OpenCode repository instructions (keep local)
 AGENTS.md
 
+# Local handover notes (keep local)
+HANDOVER.md
+
+# Local signed-release output (never commit APKs)
+app/release/
+
+# Signing material (never commit)
+*.jks
+*.keystore
+
 # OS files
 .DS_Store
 Thumbs.db
